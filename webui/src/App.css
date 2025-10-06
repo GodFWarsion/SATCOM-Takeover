@@ -1,0 +1,25 @@
+.dashboard {
+  display: grid;
+  grid-template-areas:
+    "map status"
+    "map telecommand"
+    "map logs";
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  background-color: #1a1a1a;
+  min-height: 100vh;
+  padding: 16px;
+}
+
+.card {
+  background-color: #2a2a2a;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  padding: 12px;
+  color: #f0f0f0;
+}
+
+.map    { grid-area: map; }
+.status { grid-area: status; }
+.telecommand { grid-area: telecommand; }
+.logs { grid-area: logs; }

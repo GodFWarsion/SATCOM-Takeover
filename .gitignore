@@ -1,0 +1,15 @@
+# Node.js
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# .env files (sensitive information)
+.env
+.env.local
+.env.*.local
