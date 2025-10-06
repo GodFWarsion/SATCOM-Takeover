@@ -1,6 +1,6 @@
 // src/LiveMap.jsx
 import React, { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import api from './api';
@@ -23,30 +23,6 @@ export default function LiveMap() {
   const [attribution, setAttribution] = useState(
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   );
-
-  // Telemetry fetching
-  useEffect(() => {
-    let mounted = true;
-    const fetchOnce = async () => {
-      try {
-        const data = await api.getTelemetry();
-        const list = Array.isArray(data) ? data : [data];
-        if (mounted) setSats(list);
-      } catch (e) {
-        console.warn('telemetry fetch failed', e);
-      }
-    };
-    fetchOnce();
-    const iv = setInterval(fetchOnce, 2000);
-    return () => {
-      mounted = false;
-      clearInterval(iv);
-    };
-  }, []);
-
-  const center = sats.length
-    ? [sats[0].latitude || 0, sats[0].longitude || 0]
-    : [20, 0];
 
   // Map layer options
   const tileOptions = [
@@ -76,9 +52,31 @@ export default function LiveMap() {
     }
   };
 
+  // Fetch telemetry
+  useEffect(() => {
+    let mounted = true;
+    const fetchTelemetry = async () => {
+      try {
+        const data = await api.getTelemetry();
+        if (mounted) setSats(data);
+      } catch (err) {
+        console.error('Telemetry fetch failed:', err);
+      }
+    };
+    fetchTelemetry();
+    const interval = setInterval(fetchTelemetry, 5000); // refresh every 5s
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Center map on first satellite or default
+  const center = sats.length ? [sats[0].lat, sats[0].lon] : [20, 0];
+
   return (
-    <div style={{ height: '100%', width: '100%' }}>
-      {/* Map selector */}
+    <div style={{ height: '100vh', width: '100%' }}>
+      {/* Map layer selector */}
       <div
         style={{
           position: 'absolute',
@@ -109,16 +107,26 @@ export default function LiveMap() {
 
       <MapContainer center={center} zoom={2} style={{ height: '100%', width: '100%' }}>
         <TileLayer url={tileUrl} attribution={attribution} />
+
         {sats.map((sat, idx) => (
-          <Marker key={idx} position={[sat.latitude || 0, sat.longitude || 0]}>
+          <CircleMarker
+            key={idx}
+            center={[sat.lat || 0, sat.lon || 0]}
+            radius={8}
+            fillColor={sat.status === 'ACTIVE' ? '#00ff00' : '#ff0000'}
+            color="#ffffff"
+            weight={2}
+            fillOpacity={0.8}
+          >
             <Popup>
-              <b>{sat.id || 'SAT'}</b>
-              <br />
-              Status: {sat.status || 'N/A'}
-              <br />
-              Battery: {sat.battery || 'N/A'}
+              <div>
+                <b>{sat.name || sat.id}</b><br />
+                Status: {sat.status || 'N/A'}<br />
+                Altitude: {sat.alt || 'N/A'} km<br />
+                Velocity: {sat.velocity || 'N/A'} km/s
+              </div>
             </Popup>
-          </Marker>
+          </CircleMarker>
         ))}
       </MapContainer>
     </div>

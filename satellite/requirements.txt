@@ -1,0 +1,5 @@
+Flask==2.3.3
+Flask-CORS==4.0.0
+skyfield==1.46
+requests==2.31.0
+numpy==1.25.0
