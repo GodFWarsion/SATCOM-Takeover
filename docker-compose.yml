@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  satellite:
+      build: ./satellite
+      container: satellite-service
+      ports:
+      - "5001:5001"
+      networks:
+      - satcomnet
+
+  ground:
+    build: ./ground
+    container_name: ground-station
+    ports:
+      - "5003:5003"
+    depends_on:
+      - satellite
+      - monitoring
+    networks:
+      - satcomnet
+
+  monitoring:
+    build: ./monitor
+    container_name: monitoring-service
+    ports:
+      - "5002:5002"
+    networks:
+      - satcomnet
+
+networks:
+  satcomnet:
+    driver: bridge

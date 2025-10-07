@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from skyfield.api import load
 import time, threading
+from protocol import CCSDSProtocol
 
 app = Flask(__name__)
 CORS(app)  # Allow WebUI to connect from different port
@@ -66,6 +67,13 @@ def satellite_detail(sat_id):
 
 @app.route('/health')
 def health(): return jsonify({'status':'healthy','service':'satellite'})
+
+proto = CCSDSProtocol()
+
+@app.route('/api/telemetry_ccsds')
+def telemetry_ccsds():
+    packet = proto.create_packet({'satellites': sat_service.satellites})
+    return jsonify(packet)
 
 if __name__ == "__main__":
     threading.Thread(target=sat_service.update_positions, daemon=True).start()
