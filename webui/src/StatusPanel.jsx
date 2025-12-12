@@ -1,37 +1,33 @@
-// src/StatusPanel.jsx
 import React, { useEffect, useState } from 'react';
+import api from './api';
 
-function StatusPanel() {
+export default function StatusPanel() {
   const [status, setStatus] = useState({});
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchStatus = async () => {
       try {
-        const res = await fetch('/api/ground_state');
-        const data = await res.json();
-        setStatus(data);
+        const data = await api.getGroundState();
+        if (mounted) setStatus(data || {});
       } catch (err) {
-        console.error('status fetch failed', err);
+        console.error("Status fetch failed:", err);
+        if (mounted) setStatus({});
       }
     };
+
     fetchStatus();
-    const iv = setInterval(fetchStatus, 5000);
-    return () => clearInterval(iv);
+    const interval = setInterval(fetchStatus, 3000);
+    return () => { mounted = false; clearInterval(interval); };
   }, []);
 
   return (
-    <div style={{
-      background: '#111',        // dark background
-      color: '#0f0',             // green text
-      padding: '10px',
-      borderRadius: '4px',
-      width: '100%',
-      height: '100%'
-    }}>
-      <h3 style={{marginTop:0}}>Status Panel</h3>
-      <p>Satellite: {status.satStatus || 'N/A'}</p>
-      <p>Ground Station: {status.groundStatus || 'N/A'}</p>
+    <div style={{ background: '#222', color: '#0f0', padding: 8, borderRadius: 4 }}>
+      <div>Link: {status.link || 'N/A'}</div>
+      <div>Last Seq: {status.last_seq ?? 'N/A'}</div>
+      <div>CRC Errors: {status.crc_errors ?? 0}</div>
+      <div>Last Update: {status.last_update || 'N/A'}</div>
     </div>
   );
 }
-export default StatusPanel;

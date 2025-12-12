@@ -1,4 +1,3 @@
-// src/LiveMap.jsx
 import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -24,24 +23,10 @@ export default function LiveMap() {
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   );
 
-  // Map layer options
   const tileOptions = [
-    {
-      name: 'OpenStreetMap',
-      url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    },
-    {
-      name: 'Carto Light',
-      url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png',
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-    },
-    {
-      name: 'Carto Dark',
-      url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png',
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-    },
+    { name: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; OpenStreetMap contributors' },
+    { name: 'Carto Light', url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/light_all/{z}/{x}/{y}.png', attribution: '&copy; CARTO' },
+    { name: 'Carto Dark', url: 'https://cartodb-basemaps-a.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png', attribution: '&copy; CARTO' },
   ];
 
   const handleLayerChange = (e) => {
@@ -52,31 +37,33 @@ export default function LiveMap() {
     }
   };
 
-  // Fetch telemetry
   useEffect(() => {
-    let mounted = true;
-    const fetchTelemetry = async () => {
-      try {
-        const data = await api.getTelemetry();
-        if (mounted) setSats(data);
-      } catch (err) {
-        console.error('Telemetry fetch failed:', err);
-      }
-    };
-    fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 5000); // refresh every 5s
-    return () => {
-      mounted = false;
-      clearInterval(interval);
-    };
-  }, []);
+  let mounted = true;
 
-  // Center map on first satellite or default
+  // <--- Replace the old fetchTelemetry with this
+  const fetchTelemetry = async () => {
+    try {
+      const data = await api.getTelemetry(); // data = { satellites: [...], timestamp: ... }
+      if (mounted) setSats(data.satellites || []); // only the array
+    } catch (err) {
+      console.error('Telemetry fetch failed:', err);
+    }
+  };
+
+  fetchTelemetry();
+  const interval = setInterval(fetchTelemetry, 5000); // refresh every 5s
+
+  return () => {
+    mounted = false;
+    clearInterval(interval);
+  };
+}, []);
+
+
   const center = sats.length ? [sats[0].lat, sats[0].lon] : [20, 0];
 
   return (
     <div style={{ height: '100vh', width: '100%' }}>
-      {/* Map layer selector */}
       <div
         style={{
           position: 'absolute',
@@ -108,7 +95,7 @@ export default function LiveMap() {
       <MapContainer center={center} zoom={2} style={{ height: '100%', width: '100%' }}>
         <TileLayer url={tileUrl} attribution={attribution} />
 
-        {sats.map((sat, idx) => (
+        {sats.length === 0 ? null : sats.map((sat, idx) => (
           <CircleMarker
             key={idx}
             center={[sat.lat || 0, sat.lon || 0]}

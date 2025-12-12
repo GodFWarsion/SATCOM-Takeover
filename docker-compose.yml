@@ -1,33 +1,72 @@
 version: "3.9"
 
 services:
+  attacker:
+    image: kalilinux/kali-rolling
+    container_name: attacker
+    networks:
+      - dmznet
+    command: ["sleep", "infinity"]
+    tty: true
+
+  dmz_web:
+    image: nginx:stable
+    container_name: dmz-web
+    networks:
+      - dmznet
+    ports:
+      - "8088:80"
+
   satellite:
-      build: ./satellite
-      container: satellite-service
-      ports:
-      - "5001:5001"
-      networks:
+    build: 
+      context: .
+      dockerfile: satellite/Dockerfile
+    container_name: satellite
+    networks:
       - satcomnet
+    ports:
+      - "5001:5001"
 
   ground:
-    build: ./ground
+    build: 
+      context: .
+      dockerfile: ground-station/Dockerfile
     container_name: ground-station
+    networks:
+      - satcomnet
     ports:
       - "5003:5003"
     depends_on:
       - satellite
-      - monitoring
-    networks:
-      - satcomnet
+    environment:
+      - MONITOR_SERVER_URL=http://monitoring:5002/api/logs
 
   monitoring:
-    build: ./monitor
-    container_name: monitoring-service
-    ports:
-      - "5002:5002"
+    build: 
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: monitoring
     networks:
       - satcomnet
+    ports:
+      - "5002:5002"
+
+  webui:
+    build: 
+      context: .
+      dockerfile: webui/Dockerfile
+    container_name: webui
+    networks:
+      - satcomnet
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_BASE=http://localhost:5003/api
+      - REACT_APP_MONITOR_API_URL=http://localhost:5002/api
+      - REACT_APP_SAT_API=http://localhost:5001/api
 
 networks:
+  dmznet:
+    driver: bridge
   satcomnet:
     driver: bridge

@@ -5,7 +5,7 @@ import time, threading
 from protocol import CCSDSProtocol
 
 app = Flask(__name__)
-CORS(app)  # Allow WebUI to connect from different port
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "*"]}})  # Allow WebUI to connect from different port
 
 class SatelliteService:
     def __init__(self):
@@ -20,7 +20,7 @@ class SatelliteService:
             t = self.ts.now()
             data = []
 
-            for sat in stations[:5]:
+            for sat in stations[:8]:
                 try:
                     geocentric = sat.at(t)
                     lat, lon = geocentric.subpoint().latitude.degrees, geocentric.subpoint().longitude.degrees
@@ -57,23 +57,82 @@ sat_service = SatelliteService()
 # ---- API Endpoints ----
 @app.route('/api/telemetry')
 def telemetry():
-    return jsonify({'satellites': sat_service.satellites, 'timestamp': int(time.time())})
+    try:
+        data = {
+            "satellites": sat_service.satellites or []
+        }
+        return jsonify({
+            "status": "ok",
+            "data": data,
+            "ts": int(time.time())
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": "TELEMETRY_FAIL",
+            "details": str(e),
+            "ts": int(time.time())
+        }), 500
 
 @app.route('/api/satellite/<sat_id>')
 def satellite_detail(sat_id):
-    sat = next((s for s in sat_service.satellites if s['id'] == sat_id), None)
-    if sat: return jsonify(sat)
-    return jsonify({'error':'Satellite not found'}), 404
+    try:
+        sat = next((s for s in sat_service.satellites if s["id"] == sat_id), None)
 
-@app.route('/health')
-def health(): return jsonify({'status':'healthy','service':'satellite'})
+        if sat is None:
+            return jsonify({
+                "status": "error",
+                "error": "NOT_FOUND",
+                "details": f"Satellite '{sat_id}' not found",
+                "ts": int(time.time())
+            }), 404
+
+        return jsonify({
+            "status": "ok",
+            "data": sat,
+            "ts": int(time.time())
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": "SAT_LOOKUP_FAIL",
+            "details": str(e),
+            "ts": int(time.time())
+        }), 500
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({
+        "status": "ok",
+               "data": {
+            "service": "satellite",
+            "healthy": True
+        },
+        "ts": int(time.time())
+    })
 
 proto = CCSDSProtocol()
 
-@app.route('/api/telemetry_ccsds')
+@app.route('/api/telemetry_ccsds', methods=["GET"])
 def telemetry_ccsds():
-    packet = proto.create_packet({'satellites': sat_service.satellites})
-    return jsonify(packet)
+    try:
+        packet = proto.create_packet({"satellites": sat_service.satellites})
+        return jsonify({
+            "status": "ok",
+            "data": {
+                "ccsds_packet": packet
+            },
+            "ts": int(time.time())
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "error": "CCSDS_FAIL",
+            "details": str(e),
+            "ts": int(time.time())
+        }), 500
+    
 
 if __name__ == "__main__":
     threading.Thread(target=sat_service.update_positions, daemon=True).start()

@@ -4,9 +4,9 @@ WORKDIR /app
 
 # Copy shared protocol
 COPY common ./common
-COPY satellite/ .
+COPY ground-station/ .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 5001
-CMD ["python", "satellite.py"]
+EXPOSE 5003
+CMD ["python", "ground.py"]
