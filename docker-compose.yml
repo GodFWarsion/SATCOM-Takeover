@@ -10,15 +10,20 @@ services:
     tty: true
 
   dmz_web:
-    image: nginx:stable
+    build:
+      context: ./dmz_web
+      dockerfile: Dockerfile
     container_name: dmz-web
     networks:
       - dmznet
+      - satcomnet
     ports:
       - "8088:80"
+    volumes:
+      - support_data:/app/shared/support
 
   satellite:
-    build: 
+    build:
       context: .
       dockerfile: satellite/Dockerfile
     container_name: satellite
@@ -28,7 +33,7 @@ services:
       - "5001:5001"
 
   ground:
-    build: 
+    build:
       context: .
       dockerfile: ground-station/Dockerfile
     container_name: ground-station
@@ -40,9 +45,11 @@ services:
       - satellite
     environment:
       - MONITOR_SERVER_URL=http://monitoring:5002/api/logs
+    volumes:
+      - support_data:/app/shared/support
 
   monitoring:
-    build: 
+    build:
       context: .
       dockerfile: monitor/Dockerfile
     container_name: monitoring
@@ -52,7 +59,7 @@ services:
       - "5002:5002"
 
   webui:
-    build: 
+    build:
       context: .
       dockerfile: webui/Dockerfile
     container_name: webui
@@ -61,12 +68,27 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - REACT_APP_API_BASE=http://localhost:5003/api
-      - REACT_APP_MONITOR_API_URL=http://localhost:5002/api
-      - REACT_APP_SAT_API=http://localhost:5001/api
+      - REACT_APP_API_BASE=http://ground-station:5003/api
+      - REACT_APP_MONITOR_API_URL=http://monitoring:5002/api
+      - REACT_APP_SAT_API=http://satellite:5001/api
+  monitor_ui:
+    build:
+      context: ./monitor_ui
+      dockerfile: Dockerfile
+    container_name: monitor-ui
+    networks:
+      - satcomnet
+    ports:
+      - "8080:8080"
+    depends_on:
+      - monitoring
+  
 
 networks:
   dmznet:
     driver: bridge
   satcomnet:
     driver: bridge
+
+volumes:
+  support_data:

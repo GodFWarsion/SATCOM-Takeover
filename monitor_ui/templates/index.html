@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ICS Monitoring Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      background: #0b1220;
+      color: #e5e7eb;
+    }
+
+    header {
+      background: #020617;
+      padding: 20px 30px;
+      border-bottom: 1px solid #1e293b;
+    }
+
+    header h1 {
+      margin: 0;
+      color: #38bdf8;
+      font-size: 24px;
+    }
+
+    header p {
+      margin: 4px 0 0;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    main {
+      padding: 30px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 10px;
+      padding: 20px;
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      color: #38bdf8;
+      font-size: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .metric {
+      font-size: 36px;
+      font-weight: 700;
+      color: #e5e7eb;
+    }
+
+    .sub {
+      color: #94a3b8;
+      font-size: 13px;
+    }
+
+    .status-ok {
+      color: #22c55e;
+      font-weight: 600;
+    }
+
+    .status-warn {
+      color: #facc15;
+      font-weight: 600;
+    }
+
+    footer {
+      text-align: center;
+      padding: 15px;
+      color: #64748b;
+      font-size: 12px;
+      border-top: 1px solid #1e293b;
+    }
+
+    a.button {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 10px 16px;
+      background: #0284c7;
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+
+    a.button:hover {
+      background: #0369a1;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>ICS Security Monitoring</h1>
+  <p>Satellite Ground Segment — SOC View</p>
+</header>
+
+<main>
+  <div class="card">
+    <h3>Total Logs</h3>
+    <div class="metric">{{ data.log_count }}</div>
+    <div class="sub">Last 500 events</div>
+  </div>
+
+  <div class="card">
+    <h3>Active Alerts</h3>
+    <div class="metric">{{ data.alert_count }}</div>
+    <div class="sub">Security-relevant events</div>
+    <a href="/alerts" class="button">View Alerts</a>
+  </div>
+
+  <div class="card">
+    <h3>Last Event</h3>
+    {% if data.last_log %}
+      <div class="sub">{{ data.last_log.timestamp }}</div>
+      <div>{{ data.last_log.event }}</div>
+    {% else %}
+      <div class="sub">No events yet</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h3>Last Alert</h3>
+    {% if data.last_alert %}
+      <div class="sub">{{ data.last_alert.timestamp }}</div>
+      <div class="status-warn">{{ data.last_alert.event }}</div>
+    {% else %}
+      <div class="status-ok">No active alerts</div>
+    {% endif %}
+  </div>
+</main>
+
+<footer>
+  © 2025 VYOMSAT-1C | Monitoring & Detection Layer
+</footer>
+
+</body>
+</html>

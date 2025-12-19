@@ -62,9 +62,37 @@ def add_log(level, source, event, details=None):
     print("[LOG]", entry)
 
     # Auto-alert logic
-    if level == "ALERT" or "scan" in event.lower():
-        with _alerts_lock:
-            alerts.append(entry)
+    with _alerts_lock:
+
+   
+        if event in ("COMMAND_EXEC", "MODE_CHANGE") and details.get("auth") is False:
+            alerts.append({
+                "timestamp": entry["timestamp"],
+                "severity": "CRITICAL",
+                "source": source,
+                "message": "Unauthorized command execution",
+                "details": entry
+            })
+
+        
+        elif event == "FILE_UPLOAD" and source == "dmz":
+            alerts.append({
+                "timestamp": entry["timestamp"],
+                "severity": "MEDIUM",
+                "source": source,
+                "message": "File uploaded to DMZ support interface",
+                "details": entry
+            })
+
+      
+        elif event == "FILE_APPLY" and source == "ground-station":
+            alerts.append({
+                "timestamp": entry["timestamp"],
+                "severity": "HIGH",
+                "source": source,
+                "message": "Ground station applied external file",
+                "details": entry
+            })
 
 def note_conn(src_ip):
     t = time.time()

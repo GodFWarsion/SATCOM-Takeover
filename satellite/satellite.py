@@ -1,150 +1,192 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from skyfield.api import load
-import time, threading
+import time
+import threading
+import requests
+
 from protocol import CCSDSProtocol
 
+# -----------------------------
+# App Setup
+# -----------------------------
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "*"]}})  # Allow WebUI to connect from different port
-MONITOR_INGEST = "http://monitoring:5002/api/logs"
+CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "*"]}})
 
+MONITOR_INGEST = "http://monitoring:5002/log"
+
+proto = CCSDSProtocol()
+
+# -----------------------------
+# Satellite State (SIMULATED)
+# -----------------------------
+sat_state = {
+    "mode": "IDLE",
+    "payload_power": True,
+    "antenna_mode": "NOMINAL",
+    "orbit_params": {},
+    "last_cmd_seq": None,
+    "safeties_disabled": False,
+    "firmware_version": "1.0.0",
+    "cmd_rejects": 0,
+    "cmd_exec_count": 0,
+    "logs": []
+}
+
+# -----------------------------
+# Monitoring Helper
+# -----------------------------
 def monitor_log(level, source, event, details=None):
     try:
-        payload = {
-            "status": "ok",
-            "data": {
+        requests.post(
+            MONITOR_INGEST,
+            json={
                 "level": level,
                 "source": source,
                 "event": event,
                 "details": details or {}
             },
-            "ts": int(time.time())
-        }
-        requests.post(MONITOR_INGEST, json=payload, timeout=(2,4))
+            timeout=3
+        )
     except Exception as e:
-        print("[sat->monitor] failed to send:", e)
+        print("[sat->monitor] failed:", e)
 
+# -----------------------------
+# COMMAND API
+# -----------------------------
 @app.route("/api/cmd_ccsds", methods=["POST"])
 def cmd_ccsds():
-    """
-    Accept a CCSDS command packet (wrapped or raw). Validate CRC, execute (simulated),
-    and return unified response.
-    """
     try:
         body = request.json or {}
 
-        # accept wrapped or raw
-        packet = None
-        if isinstance(body, dict) and body.get("status") == "ok" and isinstance(body.get("data"), dict):
-            packet = body["data"].get("ccsds_packet") or body["data"]
+        # unwrap CCSDS packet
+        if isinstance(body, dict) and body.get("status") == "ok":
+            packet = body.get("data", {}).get("ccsds_packet")
         else:
             packet = body if isinstance(body, dict) else None
 
         if not packet:
-            monitor_log("WARN", "satellite", "CMD_REJECTED_NO_PACKET", {"sample": str(body)[:200]})
-            return jsonify({"status":"error","error":"NO_PACKET","details":"No CCSDS packet"}, ), 400
+            monitor_log("WARN", "satellite", "NO_PACKET")
+            return jsonify({"status": "error", "error": "NO_PACKET"}), 400
 
-        # CRC check
-        try:
-            calc = proto.compute_crc(packet)
-        except Exception as e:
-            monitor_log("ERROR", "satellite", "CRC_COMPUTE_FAIL", {"exception": str(e)})
-            return jsonify({"status":"error","error":"CRC_COMPUTE_FAIL","details": str(e)}), 400
+        header = packet.get("header", {})
+        seq = header.get("seq")
 
-        if calc != packet.get("crc"):
-            monitor_log("ALERT", "satellite", "CMD_CRC_MISMATCH", {"calc": calc, "packet_crc": packet.get("crc")})
-            return jsonify({"status":"error","error":"CRC_MISMATCH","details": {"calc": calc, "packet_crc": packet.get("crc")}}), 400
+        # replay protection
+        if seq is not None and seq == sat_state["last_cmd_seq"]:
+            monitor_log("ALERT", "satellite", "REPLAY_DETECTED", {"seq": seq})
+            return jsonify({"status": "error", "error": "REPLAY_DETECTED"}), 409
 
-        # parse opcode
+        sat_state["last_cmd_seq"] = seq
+
+        # CRC validation
+        calc_crc = proto.compute_crc(packet)
+        if calc_crc != packet.get("crc"):
+            monitor_log(
+                "ALERT",
+                "satellite",
+                "CRC_MISMATCH",
+                {"calc": calc_crc, "packet": packet.get("crc")}
+            )
+            return jsonify({"status": "error", "error": "CRC_MISMATCH"}), 400
+
         body = packet.get("body", {})
         opcode = (body.get("opcode") or "").upper()
         params = body.get("params") or {}
 
-        if not opcode:
-            monitor_log("WARN", "satellite", "CMD_MISSING_OPCODE", {"packet": packet})
-            return jsonify({"status":"error","error":"MISSING_OPCODE","details":"no opcode"}), 400
+        ALLOWED_OPCODES = {
+            "PING",
+            "GET_STATUS",
+            "REQ_TELEMETRY",
+            "SET_MODE",
+            "SET_PAYLOAD_POWER",
+            "SET_ANTENNA_MODE",
+            "UPDATE_ORBIT_PARAM",
+            "ATTITUDE_ADJUST",
+            "WIPE_LOGS",
+            "DEBUG_SHELL",
+            "UPLOAD_FIRMWARE",
+            "DISABLE_SAFETIES",
+            "OVERRIDE_AUTH"
+        }
 
-        # execute simulation handlers
-        result = {"executed": False, "note": "no-op"}
-        sat_state["last_cmd_seq"] = packet.get("header",{}).get("seq")
+        if opcode not in ALLOWED_OPCODES:
+            sat_state["cmd_rejects"] += 1
+            monitor_log("WARN", "satellite", "UNKNOWN_OPCODE", {"opcode": opcode})
+            return jsonify({"status": "error", "error": "UNKNOWN_OPCODE"}), 400
 
-        # Safe simulated handlers:
+        # -----------------------------
+        # EXECUTION (SIMULATED)
+        # -----------------------------
+        sat_state["cmd_exec_count"] += 1
+        result = {"executed": True}
+
         if opcode == "PING":
-            result = {"executed": True, "response": {"alive": True, "mode": sat_state["mode"]}}
-            monitor_log("INFO", "satellite", "CMD_PING", {"mode": sat_state["mode"]})
+            result["alive"] = True
 
         elif opcode == "GET_STATUS":
-            result = {"executed": True, "status": sat_state.copy()}
-            monitor_log("INFO", "satellite", "CMD_GET_STATUS", {})
+            result["state"] = sat_state.copy()
 
         elif opcode == "REQ_TELEMETRY":
-            # For demo, append a telemetry snapshot to logs and return success
-            monitor_log("INFO", "satellite", "CMD_REQ_TELEMETRY", {})
-            result = {"executed": True, "note": "telemetry_forced"}
+            monitor_log("INFO", "satellite", "TELEMETRY_FORCED")
 
         elif opcode == "SET_MODE":
-            mode = params.get("mode", "IDLE")
-            sat_state["mode"] = mode
-            monitor_log("ALERT" if mode == "SAFE" else "INFO", "satellite", "CMD_SET_MODE", {"mode": mode})
-            result = {"executed": True, "mode": mode}
+            sat_state["mode"] = params.get("mode", "IDLE")
+            monitor_log("INFO", "satellite", "MODE_SET", {"mode": sat_state["mode"]})
 
         elif opcode == "SET_PAYLOAD_POWER":
-            val = bool(params.get("on", False))
-            sat_state["payload_power"] = val
-            monitor_log("INFO", "satellite", "CMD_SET_PAYLOAD_POWER", {"on": val})
-            result = {"executed": True, "payload_power": val}
+            sat_state["payload_power"] = bool(params.get("on", False))
 
         elif opcode == "SET_ANTENNA_MODE":
-            m = params.get("mode", "NADIR")
-            sat_state["antenna_mode"] = m
-            monitor_log("INFO", "satellite", "CMD_SET_ANTENNA_MODE", {"mode": m})
-            result = {"executed": True, "antenna_mode": m}
+            sat_state["antenna_mode"] = params.get("mode", "NOMINAL")
 
         elif opcode == "UPDATE_ORBIT_PARAM":
             sat_state["orbit_params"].update(params)
-            monitor_log("ALERT", "satellite", "CMD_UPDATE_ORBIT", {"params": params})
-            result = {"executed": True, "orbit_params": sat_state["orbit_params"]}
+            monitor_log("ALERT", "satellite", "ORBIT_UPDATE", params)
 
         elif opcode == "ATTITUDE_ADJUST":
-            monitor_log("ALERT", "satellite", "CMD_ATT_ADJUST", {"params": params})
-            result = {"executed": True, "note": "attitude_adjust_simulated"}
+            monitor_log("ALERT", "satellite", "ATTITUDE_ADJUST_SIM", params)
 
         elif opcode == "WIPE_LOGS":
-            # simulated wipe: clear sat logs list only (not ground)
-            sat_state["logs"] = []
-            monitor_log("ALERT", "satellite", "CMD_WIPE_LOGS", {"note": "simulated"})
-            result = {"executed": True}
-
-        elif opcode == "OVERRIDE_AUTH":
-            # satellite doesn't implement auth override; just log
-            monitor_log("ALERT", "satellite", "CMD_OVERRIDE_AUTH", {"note": "simulated"})
-            result = {"executed": True}
-
-        elif opcode == "UPLOAD_FIRMWARE":
-            monitor_log("ALERT", "satellite", "CMD_UPLOAD_FIRMWARE", {"note": "simulated"})
-            result = {"executed": True}
-
-        elif opcode == "DEBUG_SHELL":
-            # return fake shell output
-            monitor_log("ALERT", "satellite", "CMD_DEBUG_SHELL", {})
-            result = {"executed": True, "shell_output": "root@sat:~# id\nuid=0(root) gid=0(root)\n"}
+            sat_state["logs"].clear()
+            monitor_log("ALERT", "satellite", "LOG_WIPE_SIM")
 
         elif opcode == "DISABLE_SAFETIES":
             sat_state["safeties_disabled"] = True
-            monitor_log("ALERT", "satellite", "CMD_DISABLE_SAFETIES", {})
-            result = {"executed": True, "safeties_disabled": True}
+            monitor_log("ALERT", "satellite", "SAFETIES_DISABLED")
 
-        else:
-            monitor_log("WARN", "satellite", "CMD_UNKNOWN", {"opcode": opcode})
-            result = {"executed": False, "note": "unknown opcode"}
+        elif opcode == "UPLOAD_FIRMWARE":
+            sat_state["firmware_version"] = params.get("version", "X")
+            monitor_log("ALERT", "satellite", "FW_UPLOAD_SIM", params)
 
-        # return unified ok
-        return jsonify({"status":"ok","data":{"result": result},"ts": int(time.time())}), 200
+        elif opcode == "DEBUG_SHELL":
+            monitor_log("ALERT", "satellite", "ROOT_SHELL_SIM")
+            result["shell"] = "root@sat:~# id\nuid=0(root)\n"
+
+        elif opcode == "OVERRIDE_AUTH":
+            monitor_log("ALERT", "satellite", "AUTH_OVERRIDE_SIM")
+
+        return jsonify({
+            "status": "ok",
+            "data": {
+                "opcode": opcode,
+                "result": result,
+                "state": {
+                    "mode": sat_state["mode"],
+                    "firmware": sat_state["firmware_version"],
+                    "safeties_disabled": sat_state["safeties_disabled"]
+                }
+            },
+            "ts": int(time.time())
+        })
 
     except Exception as e:
-        monitor_log("ERROR", "satellite", "CMD_EXCEPTION", {"exception": str(e)})
-        return jsonify({"status":"error","error":"SERVER_ERROR","details": str(e), "ts": int(time.time())}), 500
+        monitor_log("ERROR", "satellite", "CMD_EXCEPTION", {"error": str(e)})
+        return jsonify({"status": "error", "error": "SERVER_ERROR"}), 500
 
+# -----------------------------
+# Satellite Position Service
+# -----------------------------
 class SatelliteService:
     def __init__(self):
         self.satellites = []
@@ -152,37 +194,42 @@ class SatelliteService:
         self.load_satellites()
 
     def load_satellites(self):
-        """Load real satellite positions (first 5) from NORAD TLE"""
         try:
-            stations = load.tle_file('https://celestrak.com/NORAD/elements/stations.txt')
+            stations = load.tle_file(
+                "https://celestrak.com/NORAD/elements/stations.txt"
+            )
             t = self.ts.now()
             data = []
 
             for sat in stations[:8]:
-                try:
-                    geocentric = sat.at(t)
-                    lat, lon = geocentric.subpoint().latitude.degrees, geocentric.subpoint().longitude.degrees
-                    alt = geocentric.subpoint().elevation.km
-                    data.append({
-                        'id': f'SAT-{len(data)+1}',
-                        'name': sat.name.strip(),
-                        'lat': round(lat,4),
-                        'lon': round(lon,4),
-                        'alt': round(alt,2),
-                        'status': 'ACTIVE',
-                        'timestamp': int(time.time()),
-                        'velocity': 7.8
-                    })
-                except: 
-                    continue
+                geo = sat.at(t).subpoint()
+                data.append({
+                    "id": f"SAT-{len(data)+1}",
+                    "name": sat.name.strip(),
+                    "lat": round(geo.latitude.degrees, 4),
+                    "lon": round(geo.longitude.degrees, 4),
+                    "alt": round(geo.elevation.km, 2),
+                    "status": "ACTIVE",
+                    "timestamp": int(time.time()),
+                    "velocity": 7.8
+                })
 
             self.satellites = data
-            print(f"Loaded {len(self.satellites)} satellites")
+            print(f"[satellite] loaded {len(data)} satellites")
+
         except Exception as e:
-            print(f"Error loading satellites: {e}")
+            print("[satellite] fallback data:", e)
             self.satellites = [
-                {'id': 'SAT-1', 'name': 'ISS (ZARYA)', 'lat':28.6, 'lon':77.2, 'alt':408, 'status':'ACTIVE', 'timestamp':int(time.time()), 'velocity':7.66},
-                {'id': 'SAT-2', 'name': 'NOAA-18', 'lat':15.3, 'lon':80.1, 'alt':854, 'status':'ACTIVE', 'timestamp':int(time.time()), 'velocity':7.35}
+                {
+                    "id": "SAT-1",
+                    "name": "ISS",
+                    "lat": 28.6,
+                    "lon": 77.2,
+                    "alt": 408,
+                    "status": "ACTIVE",
+                    "timestamp": int(time.time()),
+                    "velocity": 7.66
+                }
             ]
 
     def update_positions(self):
@@ -192,87 +239,49 @@ class SatelliteService:
 
 sat_service = SatelliteService()
 
-# ---- API Endpoints ----
-@app.route('/api/telemetry')
+# -----------------------------
+# Telemetry APIs
+# -----------------------------
+@app.route("/api/telemetry")
 def telemetry():
-    try:
-        data = {
-            "satellites": sat_service.satellites or []
-        }
-        return jsonify({
-            "status": "ok",
-            "data": data,
-            "ts": int(time.time())
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": "TELEMETRY_FAIL",
-            "details": str(e),
-            "ts": int(time.time())
-        }), 500
-
-@app.route('/api/satellite/<sat_id>')
-def satellite_detail(sat_id):
-    try:
-        sat = next((s for s in sat_service.satellites if s["id"] == sat_id), None)
-
-        if sat is None:
-            return jsonify({
-                "status": "error",
-                "error": "NOT_FOUND",
-                "details": f"Satellite '{sat_id}' not found",
-                "ts": int(time.time())
-            }), 404
-
-        return jsonify({
-            "status": "ok",
-            "data": sat,
-            "ts": int(time.time())
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": "SAT_LOOKUP_FAIL",
-            "details": str(e),
-            "ts": int(time.time())
-        }), 500
-
-
-@app.route('/api/health')
-def health():
     return jsonify({
         "status": "ok",
-               "data": {
-            "service": "satellite",
-            "healthy": True
-        },
+        "data": {"satellites": sat_service.satellites},
         "ts": int(time.time())
     })
 
-proto = CCSDSProtocol()
+@app.route("/api/satellite/<sat_id>")
+def satellite_detail(sat_id):
+    sat = next((s for s in sat_service.satellites if s["id"] == sat_id), None)
+    if not sat:
+        return jsonify({"status": "error", "error": "NOT_FOUND"}), 404
+    return jsonify({"status": "ok", "data": sat, "ts": int(time.time())})
 
-@app.route('/api/telemetry_ccsds', methods=["GET"])
+@app.route("/api/telemetry_ccsds")
 def telemetry_ccsds():
-    try:
-        packet = proto.create_packet({"satellites": sat_service.satellites})
-        return jsonify({
-            "status": "ok",
-            "data": {
-                "ccsds_packet": packet
-            },
-            "ts": int(time.time())
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "error": "CCSDS_FAIL",
-            "details": str(e),
-            "ts": int(time.time())
-        }), 500
-    
+    packet = proto.create_packet({"satellites": sat_service.satellites})
+    return jsonify({
+        "status": "ok",
+        "data": {"ccsds_packet": packet},
+        "ts": int(time.time())
+    })
 
+@app.route("/api/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "data": {"service": "satellite", "healthy": True},
+        "ts": int(time.time())
+    })
+
+# -----------------------------
+# Start Service
+# -----------------------------
 if __name__ == "__main__":
-    threading.Thread(target=sat_service.update_positions, daemon=True).start()
-    print("🛰️ Satellite Service starting...")
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    threading.Thread(
+        target=sat_service.update_positions,
+        daemon=True
+    ).start()
+
+    print("🛰️ Satellite Service starting on :5001")
+    app.run(host="0.0.0.0", port=5001, debug=True)

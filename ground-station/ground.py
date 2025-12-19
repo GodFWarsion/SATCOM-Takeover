@@ -9,6 +9,9 @@ from monitor_client import post_alert  # async helper that enqueues to monitorin
 from flask import request
 
 API_KEY = "GND-KEY-001"   # you can move to ENV later
+cmd_lock = threading.Lock()
+command_history = deque(maxlen=200)
+CMD_HISTORY_MAX = 200
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": ["http://localhost:3000", "*"]}})
@@ -26,6 +29,7 @@ ground_state = {
     "override_uses": 0
 }
 
+
 proto = CCSDSProtocol()
 # telemetry endpoint – expected to be the CCSDS packet endpoint (wrapped or raw)
 SATELLITE_URL = "http://satellite:5001/api/telemetry_ccsds"  # container name in docker-compose
@@ -42,8 +46,13 @@ def now_ts():
 def api_ok(data):
     return jsonify({"status": "ok", "data": data, "ts": now_ts()})
 
-def api_err(code, details):
-    return jsonify({"status": "error", "error": code, "details": str(details), "ts": now_ts()}), 500
+def api_err(code, details, status=500):
+    return jsonify({
+        "status": "error",
+        "error": code,
+        "details": str(details),
+        "ts": now_ts()
+    }), status
 # -------------------------
 # Authorization model
 # -------------------------
@@ -150,7 +159,7 @@ def is_authorized_for(opcode, key):
         return True, 0
     # If auth override active, allow
     if ground_state.get("auth_override"):
-        return True, PRIV_LEVELS["ROOT"]
+        return (required <= PRIV_LEVELS["ADMIN"]), PRIV_LEVELS["ADMIN"]
     # check key presence
     if not key:
         return False, None
@@ -249,6 +258,72 @@ def api_command():
     except Exception as e:
         add_log("ERROR", "Command processing failure", send_to_monitor=True, details={"exception": str(e)})
         return api_err("SERVER_ERROR", str(e))
+@app.route("/api/apply-file", methods=["POST"])
+def apply_file():
+    try:
+        file = request.files.get("file")
+        if not file:
+            return api_err("NO_FILE", "No file provided", status=400)
+
+        contents = file.read().decode(errors="ignore")
+
+        # 🔴 Intentionally unsafe parsing (demo)
+        try:
+            data = json.loads(contents)
+            opcode = (data.get("opcode") or "").upper()
+            params = data.get("params") or {}
+        except Exception:
+            opcode = "EXEC_PYLOAD"   # high-risk opcode
+            params = {"raw": contents}
+
+        # 🚨 Log detection: external file execution
+        post_alert(
+            "ALERT",
+            "ground-station",
+            "FILE_APPLY",
+            {
+                "opcode": opcode,
+                "preview": contents[:200]
+            }
+        )
+
+        # Build CCSDS packet using existing logic
+        packet = build_command_packet(opcode, params)
+
+        # Uplink to satellite
+        ok, resp = uplink_to_satellite(packet)
+
+        if not ok:
+            add_log(
+                "ERROR",
+                f"File-based command uplink failed: {opcode}",
+                send_to_monitor=True,
+                details={"resp": resp}
+            )
+            return api_err("UPLINK_FAILED", resp)
+
+        add_log(
+            "ALERT",
+            f"File-based command executed: {opcode}",
+            send_to_monitor=True,
+            details={"params": params}
+        )
+
+        return api_ok({
+            "applied": True,
+            "opcode": opcode,
+            "uplink": resp
+        })
+
+    except Exception as e:
+        add_log(
+            "ERROR",
+            "apply_file crashed",
+            send_to_monitor=True,
+            details={"exception": str(e)}
+        )
+        return api_err("SERVER_ERROR", e)
+
 
 @app.route("/api/command/history", methods=["GET"])
 def get_command_history():
@@ -360,67 +435,6 @@ def get_logs():
 def health():
     return api_ok({"service": "ground", "healthy": True})
 
-
-@app.route("/api/command", methods=["POST"])
-def send_command():
-    try:
-        # ----- API KEY CHECK -----
-        key = request.headers.get("X-API-KEY")
-        if key != API_KEY:
-            add_log("WARN", "Unauthorized command attempt", details={"ip": request.remote_addr})
-            return jsonify({
-                "status": "error",
-                "error": "UNAUTHORIZED",
-                "ts": int(time.time())
-            }), 401
-
-        body = request.json or {}
-
-        opcode = body.get("opcode")
-        params = body.get("params", {})
-
-        # ----- BASIC VALIDATION -----
-        if not opcode:
-            return jsonify({
-                "status": "error",
-                "error": "MISSING_OPCODE",
-                "ts": int(time.time())
-            }), 400
-
-        if type(params) is not dict:
-            return jsonify({
-                "status": "error",
-                "error": "INVALID_PARAMS",
-                "ts": int(time.time())
-            }), 400
-
-        # ----- BUILD COMMAND PACKET -----
-        packet = {
-            "header": {
-                "type": "CMD",
-                "seq": int(time.time()) % 65535
-            },
-            "opcode": opcode,
-            "params": params
-        }
-        packet["crc"] = proto.compute_crc(packet)
-
-        # ----- LOG LOCALLY + MONITOR -----
-        add_log("INFO", 
-                f"Command uplink: {opcode}", 
-                details={"opcode": opcode, "params": params})
-
-        # ----- MOCK UPLINK FOR NOW -----
-        # later this will POST to satellite /api/cmd_ccsds
-
-    except Exception as e:
-        add_log("ERROR", "Command error", details={"exception": str(e)})
-        return jsonify({
-            "status": "error",
-            "error": "SERVER_ERROR",
-            "details": str(e),
-            "ts": int(time.time())
-        }), 500
 
 # --- Start background thread ---
 if __name__ == "__main__":
