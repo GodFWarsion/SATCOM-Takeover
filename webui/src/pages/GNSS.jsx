@@ -19,7 +19,19 @@ const files = [
 
 const safe = (v) => (typeof v === 'number' && !isNaN(v) ? v : null);
 const fmt = (v, d = 5) => (v === null ? '—' : v.toFixed(d));
+const haversine = (a, b) => {
+  const R = 6371000;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLon = (b.lon - a.lon) * Math.PI / 180;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
 
+  const x =
+    Math.sin(dLat / 2) ** 2 +
+    Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+
+  return 2 * R * Math.asin(Math.sqrt(x));
+};
 export default function GNSS() {
   const [gnss, setGnss] = useState(null);
   const [history, setHistory] = useState([]);
@@ -30,40 +42,69 @@ export default function GNSS() {
     const fetchGNSS = async () => {
       try {
         const res = await fetch(files[index]);
-        console.log('HTTP status:', res.status);
-        console.log('Content-Type:', res.headers.get('content-type'));
-        console.log('Raw JSON:', json);
 
         const json = await res.json();
-        const raw = json.data ?? json;
-        const sample = Array.isArray(raw)
-        ? raw[Math.floor(Math.random() * raw.length)]
-        : raw;
 
+        
+        const raw = json.data ?? json;
+
+        const last = (v) =>
+        Array.isArray(v) ? v[v.length - 1] : v;
 
         const parsed = {
-        lat: safe(sample.lat ?? sample.latitude),
-        lon: safe(sample.lon ?? sample.longitude),
-        alt: safe(sample.alt ?? sample.height),
-        vel: safe(sample.vel_mps ?? sample.speed),
-        fix: sample.fix_quality ?? sample.fix ?? '—',
-        sats: sample.sat_count ?? sample.sats ?? '—',
-        spoof: Array.isArray(sample.spoof_flags) ? sample.spoof_flags : [],
+        lat: safe(last(raw.lat ?? raw.latitude)),
+        lon: safe(last(raw.lon ?? raw.longitude)),
+        alt: safe(last(raw.alt ?? raw.height)),
+        vel: safe(last(raw.vel_mps ?? raw.speed)),
+        fix: raw.fix_quality ?? raw.fix ?? '—',
+        sats: raw.sat_count ?? raw.sats ?? '—',
+        spoof: Array.isArray(raw.spoof_flags) ? raw.spoof_flags : [],
         };
+        const flags = [];
+
+        if (history.length >= 1) {
+        const prev = history[history.length - 1];
+        const dist = haversine(prev, { lat: parsed.lat, lon: parsed.lon }); // meters
+
+        // velocity = meters per second (1s poll)
+        parsed.vel = dist;
+
+        if (dist > 500)
+            flags.push(`Teleport detected (${dist.toFixed(1)} m)`);
+
+        if (parsed.vel > 200)
+            flags.push(`Impossible velocity (${parsed.vel.toFixed(1)} m/s)`);
+        }
+
+        parsed.spoof = flags;
+
 
 
         if (parsed.lat !== null && parsed.lon !== null) {
           setGnss(parsed);
 
-          setHistory((prev) => [
+          setHistory((prev) => {
+        const next = [
             ...prev.slice(-50),
             {
-              time: new Date().toLocaleTimeString(),
-              lat: parsed.lat,
-              lon: parsed.lon,
-              alt_km: parsed.alt !== null ? parsed.alt / 1000 : null,
+            time: new Date().toLocaleTimeString(),
+            lat: parsed.lat,
+            lon: parsed.lon,
+            alt_km: parsed.alt !== null ? parsed.alt / 1000 : null,
             },
-          ]);
+        ];
+
+        // 🔥 DERIVE VELOCITY (m/s)
+        if (next.length >= 2) {
+            const a = next[next.length - 2];
+            const b = next[next.length - 1];
+            const dist = haversine(a, b); // meters
+            parsed.vel = dist; // per second (1s polling)
+        }
+
+        return next;
+        });
+
         }
 
         index = (index + 1) % files.length;
