@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import api from './api';
+import api from '../api';
+
 
 // Fix default Leaflet icon paths
 delete L.Icon.Default.prototype._getIconUrl;
@@ -58,6 +59,9 @@ export default function LiveMap() {
     clearInterval(interval);
   };
 }, []);
+  useEffect(() => {
+    console.log("🛰️ Satellites in state:", sats);
+  }, [sats]);
 
 
   const center = sats.length ? [sats[0].lat, sats[0].lon] : [20, 0];
@@ -92,16 +96,24 @@ export default function LiveMap() {
         </label>
       </div>
 
-      <MapContainer center={center} zoom={2} style={{ height: '100%', width: '100%' }}>
+      <MapContainer
+  center={center}
+  zoom={2}
+  style={{ height: '100%', width: '100%' }}
+  whenReady={(map) => {
+    setTimeout(() => map.target.invalidateSize(), 200);
+  }}
+>
+
         <TileLayer url={tileUrl} attribution={attribution} />
 
         {sats.length === 0 ? null : sats.map((sat, idx) => (
           <CircleMarker
             key={idx}
             center={[sat.lat || 0, sat.lon || 0]}
-            radius={8}
+            radius={16}
             fillColor={sat.status === 'ACTIVE' ? '#00ff00' : '#ff0000'}
-            color="#ffffff"
+            color="#ff0000"
             weight={2}
             fillOpacity={0.8}
           >

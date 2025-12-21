@@ -1,5 +1,7 @@
 // src/TelecommandConsole.jsx
 import React, { useState } from 'react';
+import api from '../api';
+
 
 function TelecommandConsole() {
   const [command, setCommand] = useState('');

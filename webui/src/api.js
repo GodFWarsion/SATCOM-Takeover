@@ -1,13 +1,8 @@
 // src/api.js
+const API_BASE = "http://localhost:5003/api";
+const MONITOR_API = "http://localhost:5002/api";
+const SAT_BASE = "http://localhost:5001/api";
 
-const API_BASE =
-  process.env.REACT_APP_API_BASE || "http://ground:5003/api";
-
-const MONITOR_API =
-  process.env.REACT_APP_MONITOR_API_URL || "http://monitoring:5002/api";
-
-const SAT_BASE =
-  process.env.REACT_APP_SAT_API || "http://satellite:5001/api";
 
 // ---- shared safe fetch wrapper ----
 async function safeFetch(url) {
@@ -38,15 +33,17 @@ async function safeFetch(url) {
 export default {
   // ---- SAT subsystem ----
   getTelemetry: async () => {
-    const data = await safeFetch(`${SAT_BASE}/telemetry`);
-    return data?.satellites ? data : { satellites: [] };
+  const res = await safeFetch(`${SAT_BASE}/telemetry`);
+  return res?.data?.satellites
+    ? { satellites: res.data.satellites }
+    : { satellites: [] };
   },
 
   // ---- Ground subsystem ----
   getGroundState: async () => {
-    const data = await safeFetch(`${API_BASE}/ground_state`);
-    return data || { antennas: [], status: "unknown" };
-  },
+  const res = await safeFetch(`${API_BASE}/ground_state`);
+  return res?.data || {};
+},
 
   // ---- SIEM/Monitoring ----
   getLogs: async () => {

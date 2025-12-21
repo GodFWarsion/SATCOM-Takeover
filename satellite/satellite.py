@@ -1,3 +1,4 @@
+from curses.ascii import alt
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from skyfield.api import load
@@ -192,23 +193,33 @@ class SatelliteService:
         self.satellites = []
         self.ts = load.timescale()
         self.load_satellites()
+        self.time_offset = 0
+
 
     def load_satellites(self):
         try:
             stations = load.tle_file(
                 "https://celestrak.com/NORAD/elements/stations.txt"
             )
-            t = self.ts.now()
+            self.time_offset += 120  # simulate 2 minutes per update
+            t = self.ts.now() + self.time_offset
             data = []
 
             for sat in stations[:8]:
                 geo = sat.at(t).subpoint()
+                lat = geo.latitude.degrees
+                lon = geo.longitude.degrees
+                alt = geo.elevation.km
+
+    # 🚨 CRITICAL FILTER
+                if not all(map(lambda v: v == v, [lat, lon, alt])):  # NaN check
+                    continue
                 data.append({
                     "id": f"SAT-{len(data)+1}",
                     "name": sat.name.strip(),
-                    "lat": round(geo.latitude.degrees, 4),
-                    "lon": round(geo.longitude.degrees, 4),
-                    "alt": round(geo.elevation.km, 2),
+                    "lat": round(lat, 4),
+                    "lon": round(lon, 4),
+                    "alt": round(alt, 2),
                     "status": "ACTIVE",
                     "timestamp": int(time.time()),
                     "velocity": 7.8
@@ -234,7 +245,7 @@ class SatelliteService:
 
     def update_positions(self):
         while True:
-            time.sleep(30)
+            time.sleep(10)
             self.load_satellites()
 
 sat_service = SatelliteService()
@@ -282,6 +293,7 @@ if __name__ == "__main__":
         target=sat_service.update_positions,
         daemon=True
     ).start()
+    
 
     print("🛰️ Satellite Service starting on :5001")
     app.run(host="0.0.0.0", port=5001, debug=True)

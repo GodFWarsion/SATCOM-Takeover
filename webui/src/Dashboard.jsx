@@ -1,30 +1,56 @@
 // src/Dashboard.jsx
 import React from 'react';
-import LiveMap from './LiveMap';
-import StatusPanel from './StatusPanel';
-import TelecommandConsole from './TelecommandConsole';
-import LogPanel from './LogPanel';
+import { useNavigate } from 'react-router-dom';
+
+import LiveMap from './components/LiveMap';
+import StatusPanel from './components/StatusPanel';
+import TelecommandConsole from './components/TelecommandConsole';
+import LogPanel from './components/LogPanel';
 import './Dashboard.css';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
+
   return (
     <div className="dashboard">
+
+      {/* 🔹 Top Navigation Bar */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 20,
+          left: 20,
+          zIndex: 1000,
+        }}
+      >
+        <button
+          onClick={() => navigate('/gnss')}
+          style={{
+            padding: '8px 14px',
+            fontWeight: 'bold',
+            cursor: 'pointer',
+          }}
+        >
+          GNSS Telemetry
+        </button>
+      </div>
+
       {/* Windowed Map */}
       <div className="map-window glass">
         <LiveMap />
       </div>
 
-      {/* Status Panel - top-right */}
+      {/* Status Panel */}
       <div className="status-panel glass">
         <StatusPanel />
       </div>
 
-      {/* Telecommand Console - bottom-right */}
+      {/* Telecommand Console */}
       <div className="telecommand-console glass">
         <TelecommandConsole />
       </div>
 
-      {/* Logs Panel - bottom-left */}
+      {/* Logs Panel */}
       <div
         className="logs-panel glass"
         style={{
@@ -37,6 +63,7 @@ export default function Dashboard() {
       >
         <LogPanel />
       </div>
+
     </div>
   );
 }

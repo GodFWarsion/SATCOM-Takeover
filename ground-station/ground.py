@@ -6,7 +6,6 @@ from datetime import datetime
 from collections import deque
 from common.protocol import CCSDSProtocol
 from monitor_client import post_alert  # async helper that enqueues to monitoring
-from flask import request
 
 API_KEY = "GND-KEY-001"   # you can move to ENV later
 cmd_lock = threading.Lock()
@@ -28,6 +27,18 @@ ground_state = {
     "auth_override": False,
     "override_uses": 0
 }
+gnss_state = {
+    "lat": None,
+    "lon": None,
+    "alt": None,
+    "vel_mps": None,
+    "fix_quality": None,
+    "sat_count": None,
+    "gnss_time": None,
+    "last_update": None,
+    "spoof_flags": []
+}
+gnss_history = deque(maxlen=10)
 
 
 proto = CCSDSProtocol()
@@ -167,7 +178,16 @@ def is_authorized_for(opcode, key):
     if key_priv is None:
         return False, None
     return (key_priv >= required), key_priv
+LINK_TIMEOUT = 12  # seconds
 
+def compute_link_state():
+    last = ground_state.get("last_update")
+    now = time.time()
+
+    if last and (now - last) <= LINK_TIMEOUT:
+        ground_state["link"] = "CONNECTED"
+    else:
+        ground_state["link"] = "DISCONNECTED"
 # -------------------------
 # Command build & uplink
 # -------------------------
@@ -359,6 +379,35 @@ def _extract_ccsds_packet(resp_json):
 
     return None
 
+@app.route("/api/gnss", methods=["POST"])
+def ingest_gnss():
+    data = request.json or {}
+
+    gnss_state.update({
+        "lat": data.get("lat"),
+        "lon": data.get("lon"),
+        "alt": data.get("alt"),
+        "vel_mps": data.get("vel_mps"),
+        "fix_quality": data.get("fix_quality"),
+        "sat_count": data.get("sat_count"),
+        "gnss_time": data.get("gnss_time"),
+        "last_update": now_ts()
+    })
+
+    add_log(
+        "INFO",
+        "GNSS update received",
+        send_to_monitor=False,
+        details={
+            "lat": gnss_state["lat"],
+            "lon": gnss_state["lon"],
+            "vel": gnss_state["vel_mps"]
+        }
+    )
+
+    return api_ok({"ingested": True})
+
+
 def poll_satellite():
     """
     Periodically poll the satellite CCSDS telemetry endpoint.
@@ -373,14 +422,13 @@ def poll_satellite():
                     resp_json = res.json()
                 except ValueError:
                     add_log("ERROR", "Telemetry returned non-JSON", send_to_monitor=True, details={"status_code": res.status_code})
-                    ground_state["link"] = "DISCONNECTED"
                     time.sleep(10)
                     continue
 
                 packet = _extract_ccsds_packet(resp_json)
                 if packet is None:
                     add_log("WARN", "Telemetry payload had unexpected structure", send_to_monitor=True, details={"sample": str(resp_json)[:200]})
-                    ground_state["link"] = "DISCONNECTED"
+                    
                     time.sleep(10)
                     continue
 
@@ -389,39 +437,49 @@ def poll_satellite():
                     crc_calc = proto.compute_crc(packet)
                 except Exception as e:
                     add_log("ERROR", f"CRC compute failed: {e}", send_to_monitor=True, details={"exception": str(e)})
-                    ground_state["link"] = "DISCONNECTED"
+                    
                     time.sleep(10)
                     continue
 
                 seq = packet.get("header", {}).get("seq")
                 packet_crc = packet.get("crc")
 
+                ground_state["last_seq"] = seq
+                ground_state["last_update"] = now_ts()
+
                 if crc_calc == packet_crc:
-                    ground_state["link"] = "CONNECTED"
-                    ground_state["last_seq"] = seq
-                    ground_state["last_update"] = now_iso_z()
-                    add_log("INFO", f"Received telemetry seq={seq} CRC=OK", send_to_monitor=False, details={"seq": seq})
+                    add_log(
+                        "INFO",
+                        f"Received telemetry seq={seq} CRC=OK",
+                        send_to_monitor=False,
+                        details={"seq": seq}
+                    )
                 else:
                     ground_state["crc_errors"] += 1
-                    msg = f"CRC mismatch for seq={seq}"
-                    add_log("WARN", msg, send_to_monitor=True, details={"seq": seq, "calc_crc": crc_calc, "packet_crc": packet_crc})
+                    add_log("WARN", f"CRC mismatch for seq={seq}",
+                        send_to_monitor=True,
+                        details={
+                            "seq": seq,
+                            "calc_crc": crc_calc,
+                            "packet_crc": packet_crc
+                        }
+                    )
             else:
                 add_log("ERROR", f"Telemetry fetch failed ({res.status_code})", send_to_monitor=True, details={"status_code": res.status_code})
-                ground_state["link"] = "DISCONNECTED"
 
         except requests.exceptions.RequestException as e:
             add_log("ERROR", f"Satellite unreachable: {e}", send_to_monitor=True, details={"exception": str(e)})
-            ground_state["link"] = "DISCONNECTED"
+
         except Exception as e:
             # catch-all
             add_log("ERROR", f"Unexpected poll error: {e}", send_to_monitor=True, details={"exception": str(e)})
-            ground_state["link"] = "DISCONNECTED"
 
         time.sleep(10)  # poll interval (seconds)
 
 # --- API Endpoints ---
 @app.route("/api/ground_state")
 def get_ground_state():
+    compute_link_state()
     return api_ok(ground_state)
 
 @app.route("/api/logs")
@@ -434,6 +492,9 @@ def get_logs():
 @app.route('/api/health')
 def health():
     return api_ok({"service": "ground", "healthy": True})
+@app.route("/api/gnss")
+def get_gnss():
+    return api_ok(gnss_state)
 
 
 # --- Start background thread ---
